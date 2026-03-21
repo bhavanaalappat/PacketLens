@@ -1,7 +1,10 @@
-// main_window.cpp
+// main_window.cpp  (updated — v2 with graph view)
 #include "main_window.h"
 #include "sniffer_backend.h"
 #include "connection_model.h"
+#include "network_graph_widget.h"
+#include "side_panel.h"
+#include "port_config.h"
 
 #include <QApplication>
 #include <QTableView>
@@ -18,22 +21,23 @@
 #include <QPalette>
 #include <QFont>
 #include <QFrame>
+#include <QTabWidget>
+#include <QSplitter>
+#include <QTabBar>
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
     setWindowTitle("PacketLens — Network Flow Monitor");
-    resize(1280, 720);
+    resize(1440, 820);
+
+    // Load port rules (from ports.txt in CWD, falls back to built-in defaults)
+    PortConfig::instance().reload("ports.txt");
 
     applyDarkStyle();
     setupUi();
 
-    // ── Wire signals ──────────────────────────────────────────────────────────
-    // newConnectionFound is emitted from the worker thread.
-    // Qt::QueuedConnection (the default for cross-thread connects) ensures
-    // the slot runs on the main thread even though the signal was emitted
-    // from a background std::thread.
     connect(backend_, &SnifferBackend::newConnectionFound,
             this,     &MainWindow::onNewConnection,
             Qt::QueuedConnection);
@@ -42,16 +46,16 @@ MainWindow::MainWindow(QWidget* parent)
             this,     &MainWindow::onError,
             Qt::QueuedConnection);
 
-    // ── QTimer: pull a snapshot every second ──────────────────────────────────
-    // The timer fires on the main (GUI) thread; no mutex needed by the caller
-    // because FlowManager::get_snapshot() is internally mutex-guarded.
+    // Connect graph node clicks to side panel
+    connect(graphWidget_, &NetworkGraphWidget::nodeSelected,
+            this,         &MainWindow::onNodeSelected);
+
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, &MainWindow::onRefreshTimer);
-    timer_->start(1000); // 1 000 ms = 1 s
+    timer_->start(1000);
 
-    // ── Start capture ─────────────────────────────────────────────────────────
     if (!backend_->start()) {
-        // errorOccurred will have been emitted; the slot will show a dialog.
+        // errorOccurred signal will show a dialog
     }
 }
 
@@ -62,7 +66,6 @@ MainWindow::~MainWindow() {
 
 // ── UI construction ───────────────────────────────────────────────────────────
 void MainWindow::setupUi() {
-    // Central widget
     auto* central = new QWidget(this);
     setCentralWidget(central);
 
@@ -81,7 +84,7 @@ void MainWindow::setupUi() {
 
     auto* search = new QLineEdit;
     search->setObjectName("searchBox");
-    search->setPlaceholderText("Filter (IP, process, state…)");
+    search->setPlaceholderText("Filter table (IP, process, state…)");
     search->setMaximumWidth(280);
 
     statusLbl_ = new QLabel("Starting…");
@@ -96,14 +99,25 @@ void MainWindow::setupUi() {
 
     vLayout->addWidget(headerFrame);
 
-    // ── Table ─────────────────────────────────────────────────────────────────
+    // ── Backend & model (created before tabs so tabs can reference them) ──────
     backend_ = new SnifferBackend(this);
     model_   = new ConnectionModel(this);
+
+    // ── Tab widget ────────────────────────────────────────────────────────────
+    tabs_ = new QTabWidget(this);
+    tabs_->setObjectName("mainTabs");
+    tabs_->setDocumentMode(true);
+
+    // ── Tab 1: Table view ─────────────────────────────────────────────────────
+    auto* tableTab    = new QWidget;
+    auto* tableLayout = new QVBoxLayout(tableTab);
+    tableLayout->setContentsMargins(0, 4, 0, 0);
+    tableLayout->setSpacing(0);
 
     proxy_ = new QSortFilterProxyModel(this);
     proxy_->setSourceModel(model_);
     proxy_->setFilterCaseSensitivity(Qt::CaseInsensitive);
-    proxy_->setFilterKeyColumn(-1); // search all columns
+    proxy_->setFilterKeyColumn(-1);
 
     connect(search, &QLineEdit::textChanged,
             proxy_, &QSortFilterProxyModel::setFilterFixedString);
@@ -115,21 +129,38 @@ void MainWindow::setupUi() {
     table_->setSelectionBehavior(QAbstractItemView::SelectRows);
     table_->setSelectionMode(QAbstractItemView::SingleSelection);
     table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    table_->setAlternatingRowColors(false); // we colour-code manually
+    table_->setAlternatingRowColors(false);
     table_->verticalHeader()->hide();
     table_->horizontalHeader()->setStretchLastSection(true);
     table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
-    // Sensible column widths
-    table_->setColumnWidth(0, 130); // Src IP
-    table_->setColumnWidth(1,  60); // SPort
-    table_->setColumnWidth(2, 130); // Dst IP
-    table_->setColumnWidth(3,  60); // DPort
-    table_->setColumnWidth(4,  55); // Proto
-    table_->setColumnWidth(5,  80); // Packets
-    table_->setColumnWidth(6,  90); // Bytes
-    table_->setColumnWidth(7, 140); // Process
+    table_->setColumnWidth(0, 130);
+    table_->setColumnWidth(1,  60);
+    table_->setColumnWidth(2, 130);
+    table_->setColumnWidth(3,  60);
+    table_->setColumnWidth(4,  55);
+    table_->setColumnWidth(5,  80);
+    table_->setColumnWidth(6,  90);
+    table_->setColumnWidth(7, 140);
 
-    vLayout->addWidget(table_);
+    tableLayout->addWidget(table_);
+    tabs_->addTab(tableTab, "  📋  Flow Table  ");
+
+    // ── Tab 2: Graph view + side panel ───────────────────────────────────────
+    graphWidget_ = new NetworkGraphWidget;
+    sidePanel_   = new SidePanel;
+
+    graphSplit_ = new QSplitter(Qt::Horizontal);
+    graphSplit_->addWidget(graphWidget_);
+    graphSplit_->addWidget(sidePanel_);
+    graphSplit_->setStretchFactor(0, 1);
+    graphSplit_->setStretchFactor(1, 0);
+    graphSplit_->setSizes({ 1180, 240 });
+    graphSplit_->setHandleWidth(2);
+    graphSplit_->setStyleSheet("QSplitter::handle { background: #2a2a4a; }");
+
+    tabs_->addTab(graphSplit_, "  🌐  Network Graph  ");
+
+    vLayout->addWidget(tabs_);
 
     // Status bar
     statusBar()->setObjectName("statusBar");
@@ -179,15 +210,29 @@ void MainWindow::applyDarkStyle() {
             padding: 4px 8px;
             font-size: 12px;
         }
-        #searchBox:focus {
-            border: 1px solid #6090d0;
-        }
+        #searchBox:focus { border: 1px solid #6090d0; }
 
-        #statusLabel {
-            color: #88a0c0;
-            font-size: 11px;
-        }
+        #statusLabel { color: #88a0c0; font-size: 11px; }
 
+        /* ── Tabs ──────────────────────────────────────────────────────────── */
+        #mainTabs QTabBar::tab {
+            background: #1a1a2e;
+            color: #6080a0;
+            border: none;
+            border-bottom: 2px solid transparent;
+            padding: 6px 18px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        #mainTabs QTabBar::tab:selected {
+            color: #7eb8f7;
+            border-bottom: 2px solid #5090e0;
+            background: #12121e;
+        }
+        #mainTabs QTabBar::tab:hover { color: #a0c0e8; background: #181828; }
+        #mainTabs::pane { border: none; }
+
+        /* ── Flow Table ─────────────────────────────────────────────────────── */
         #flowTable {
             background: #18182a;
             gridline-color: #2a2a3e;
@@ -196,9 +241,7 @@ void MainWindow::applyDarkStyle() {
             font-family: "Cascadia Code", "Consolas", monospace;
             font-size: 12px;
         }
-        #flowTable::item:selected {
-            background: rgba(60,100,180,0.45);
-        }
+        #flowTable::item:selected { background: rgba(60,100,180,0.45); }
 
         QHeaderView::section {
             background: #222236;
@@ -210,18 +253,13 @@ void MainWindow::applyDarkStyle() {
             border-bottom: 1px solid #3a3a5a;
             padding: 5px 6px;
         }
-        QHeaderView::section:hover {
-            background: #2a2a46;
-        }
+        QHeaderView::section:hover { background: #2a2a46; }
 
         QScrollBar:vertical {
-            background: #1a1a2a;
-            width: 8px;
-            border-radius: 4px;
+            background: #1a1a2a; width: 8px; border-radius: 4px;
         }
         QScrollBar::handle:vertical {
-            background: #3a4a6a;
-            border-radius: 4px;
+            background: #3a4a6a; border-radius: 4px;
         }
 
         QStatusBar {
@@ -233,11 +271,16 @@ void MainWindow::applyDarkStyle() {
 }
 
 // ── Slots ─────────────────────────────────────────────────────────────────────
-
-// Called every 1 000 ms by QTimer — runs on main thread, safe.
 void MainWindow::onRefreshTimer() {
     auto snap = backend_->snapshot();
-    model_->refresh(std::move(snap));
+
+    // Update table model
+    model_->refresh(snap);
+
+    // Update graph (only when the graph tab is visible to save CPU)
+    if (tabs_->currentIndex() == 1) {
+        graphWidget_->updateFromSnapshot(snap);
+    }
 
     uint64_t pkts  = backend_->totalPackets();
     uint64_t bytes = backend_->totalBytes();
@@ -250,20 +293,24 @@ void MainWindow::onRefreshTimer() {
     );
 }
 
-// Called from worker thread via Qt::QueuedConnection — runs on main thread.
 void MainWindow::onNewConnection(QString srcIp, QString dstIp,
-                                 quint16 srcPort, quint16 dstPort,
-                                 QString protocol, QString process) {
+                                  quint16 srcPort, quint16 dstPort,
+                                  QString protocol, QString process) {
     statusBar()->showMessage(
         QString("New: %1:%2 → %3:%4  [%5]  %6")
             .arg(srcIp).arg(srcPort)
             .arg(dstIp).arg(dstPort)
             .arg(protocol)
             .arg(process.isEmpty() ? "unknown" : process),
-        4000 // clear after 4 s
+        4000
     );
 }
 
 void MainWindow::onError(QString message) {
     QMessageBox::critical(this, "PacketLens — Error", message);
+}
+
+void MainWindow::onNodeSelected(QString ip, uint64_t bytes, uint64_t packets,
+                                 QString process, quint16 port, QString state) {
+    sidePanel_->showNode(ip, bytes, packets, process, port, state);
 }

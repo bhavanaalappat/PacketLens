@@ -1,4 +1,4 @@
-// sniffer_backend.cpp
+// sniffer_backend.cpp  (updated — adds HTTP API)
 #include "sniffer_backend.h"
 #include "tcp_parser.h"
 
@@ -126,12 +126,39 @@ bool SnifferBackend::start() {
 
     sniffer_thread_ = std::thread(&SnifferBackend::snifferThread, this);
     worker_thread_  = std::thread(&SnifferBackend::workerThread,  this);
+
+    // ── Start embedded HTTP API ───────────────────────────────────────────────
+    httpApi_ = std::make_unique<HttpApi>(
+        HTTP_API_PORT,
+        // Snapshot lambda — called from HttpApi's thread; FlowManager is mutex-guarded
+        [this]() -> std::vector<FlowSnapshot> {
+            return manager_.get_snapshot();
+        },
+        // Stats lambda
+        [this](uint64_t& pkts, uint64_t& bytes, size_t& flows) {
+            pkts  = manager_.total_packets();
+            bytes = manager_.total_bytes();
+            flows = manager_.get_flow_count();
+        }
+    );
+
+    if (!httpApi_->start()) {
+        // Non-fatal — PacketLens works fine without the API
+        std::cerr << "[HttpApi] Failed to start — MCP integration unavailable\n";
+        httpApi_.reset();
+    }
+
     return true;
 }
 
 // ── stop() ────────────────────────────────────────────────────────────────────
 void SnifferBackend::stop() {
     if (!running_.exchange(false)) return;
+
+    if (httpApi_) {
+        httpApi_->stop();
+        httpApi_.reset();
+    }
 
     if (pcap_handle_) {
         pcap_breakloop(static_cast<pcap_t*>(pcap_handle_));
@@ -228,8 +255,6 @@ void SnifferBackend::workerThread() {
                     manager_.cache_process(key, info);
                     last_lookup.erase(key);
 
-                    // ── Signal: newConnectionFound ──────────────────────────
-                    // Qt automatically queues this across the thread boundary.
                     char sa[INET_ADDRSTRLEN], da[INET_ADDRSTRLEN];
                     inet_ntop(AF_INET, &sip, sa, sizeof(sa));
                     inet_ntop(AF_INET, &dip, da, sizeof(da));
@@ -247,7 +272,6 @@ void SnifferBackend::workerThread() {
 
         manager_.update(key, rp.header.len, tcp_syn, tcp_fin_rst);
 
-        // Garbage-collect every 10 s
         if (std::chrono::duration_cast<std::chrono::seconds>(now - last_gc).count() >= 10) {
             manager_.garbage_collect();
             last_gc = now;

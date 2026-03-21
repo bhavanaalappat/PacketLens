@@ -4,14 +4,12 @@ project(PacketLens LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ── Qt MOC ────────────────────────────────────────────────────────────────────
-# Qt's Meta-Object Compiler (MOC) must run automatically on any class that
-# uses Q_OBJECT.  CMAKE_AUTOMOC handles this transparently.
+# ── Qt MOC / RCC / UIC ───────────────────────────────────────────────────────
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-# ── Qt6 Widgets ───────────────────────────────────────────────────────────────
+# ── Qt6 ──────────────────────────────────────────────────────────────────────
 find_package(Qt6 COMPONENTS Widgets REQUIRED)
 
 # ── libpcap ───────────────────────────────────────────────────────────────────
@@ -24,6 +22,15 @@ set(SOURCES
     sniffer_backend.cpp
     connection_model.cpp
     main_window.cpp
+
+    # ── v2: graph view ────────────────────────────────────────────────────────
+    port_config.cpp
+    graph_node.cpp
+    network_graph_widget.cpp
+    side_panel.cpp
+
+    # ── v3: embedded HTTP API (MCP bridge) ────────────────────────────────────
+    http_api.cpp
 )
 
 set(HEADERS
@@ -32,6 +39,15 @@ set(HEADERS
     sniffer_backend.h
     connection_model.h
     main_window.h
+
+    # ── v2: graph view ────────────────────────────────────────────────────────
+    port_config.h
+    graph_node.h
+    network_graph_widget.h
+    side_panel.h
+
+    # ── v3: embedded HTTP API ─────────────────────────────────────────────────
+    http_api.h
 )
 
 # ── Executable ────────────────────────────────────────────────────────────────
@@ -44,5 +60,4 @@ target_link_libraries(packetlens
         pthread
 )
 
-# Needed on Linux to read /proc/net/tcp as root
 target_compile_options(packetlens PRIVATE -Wall -Wextra)

@@ -1,21 +1,26 @@
 #pragma once
-// main_window.h
+// main_window.h  (updated — v2 with graph view)
 //
 // QMainWindow that owns:
-//   • SnifferBackend  — capture & processing (background threads)
-//   • ConnectionModel — data model for the table
-//   • QTableView      — the visible grid
-//   • QTimer          — fires every 1000 ms to pull a snapshot
+//   • SnifferBackend      — capture & processing (background threads)
+//   • ConnectionModel     — data model for the table view
+//   • NetworkGraphWidget  — force-directed graph canvas
+//   • SidePanel           — node-detail inspector
+//   • QTabWidget          — switches between Table and Graph views
+//   • QTimer              — fires every 1000 ms to pull a snapshot
 
 #include <QMainWindow>
 #include <QLabel>
 #include <QTimer>
-#include <memory>
 
 class SnifferBackend;
 class ConnectionModel;
+class NetworkGraphWidget;
+class SidePanel;
 class QTableView;
 class QSortFilterProxyModel;
+class QTabWidget;
+class QSplitter;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -25,27 +30,29 @@ public:
     ~MainWindow() override;
 
 private slots:
-    // Connected to QTimer::timeout — polls the backend for a snapshot
-    // and refreshes the model in one batch.
     void onRefreshTimer();
-
-    // Connected to SnifferBackend::newConnectionFound — used to update
-    // the status bar instantly when a new process is resolved.
     void onNewConnection(QString srcIp, QString dstIp,
                          quint16 srcPort, quint16 dstPort,
                          QString protocol, QString process);
-
-    // Connected to SnifferBackend::errorOccurred
     void onError(QString message);
+    void onNodeSelected(QString ip, uint64_t bytes, uint64_t packets,
+                        QString process, quint16 port, QString state);
 
 private:
     void setupUi();
     void applyDarkStyle();
 
-    SnifferBackend*          backend_    = nullptr;
-    ConnectionModel*         model_      = nullptr;
-    QSortFilterProxyModel*   proxy_      = nullptr;
-    QTableView*              table_      = nullptr;
-    QLabel*                  statusLbl_  = nullptr;
-    QTimer*                  timer_      = nullptr;
+    SnifferBackend*        backend_    = nullptr;
+    ConnectionModel*       model_      = nullptr;
+    QSortFilterProxyModel* proxy_      = nullptr;
+    QTableView*            table_      = nullptr;
+    QLabel*                statusLbl_  = nullptr;
+    QTimer*                timer_      = nullptr;
+
+    // Graph view components
+    NetworkGraphWidget*    graphWidget_ = nullptr;
+    SidePanel*             sidePanel_   = nullptr;
+    QSplitter*             graphSplit_  = nullptr;
+
+    QTabWidget*            tabs_        = nullptr;
 };
