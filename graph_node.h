@@ -58,8 +58,8 @@ public:
     qreal radius() const;
 
     // Card size constants
-    static constexpr qreal CARD_W = 194.0;
-    static constexpr qreal CARD_H = 118.0;
+    static constexpr qreal CARD_W = 210.0;
+    static constexpr qreal CARD_H = 110.0;
 
 private:
     void  drawInfoCard(QPainter* p) const;

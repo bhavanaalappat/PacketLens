@@ -44,24 +44,24 @@ SidePanel::SidePanel(QWidget* parent) : QWidget(parent) {
 }
 
 void SidePanel::buildUi() {
-    setMinimumWidth(220);
-    setMaximumWidth(260);
+    setMinimumWidth(210);
+    setMaximumWidth(240);
     setStyleSheet(R"(
         SidePanel {
-            background: #0e0e18;
-            border-left: 1px solid #2a2a4a;
+            background: #10121d;
+            border-left: 1px solid #26314a;
         }
     )");
 
     auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(10, 12, 10, 12);
+    outer->setContentsMargins(10, 10, 10, 10);
     outer->setSpacing(8);
 
     // Header
-    auto* header = new QLabel("● Node Inspector");
+    auto* header = new QLabel("Node Inspector");
     header->setStyleSheet(
-        "color:#7eb8f7; font-size:13px; font-weight:bold; "
-        "border-bottom:1px solid #2a2a4a; padding-bottom:6px;");
+        "color:#8fc5ff; font-size:13px; font-weight:bold; "
+        "border-bottom:1px solid #26314a; padding-bottom:6px;");
     outer->addWidget(header);
 
     // Card
@@ -69,19 +69,19 @@ void SidePanel::buildUi() {
     card_->setObjectName("nodeCard");
     card_->setStyleSheet(R"(
         #nodeCard {
-            background: #14141f;
-            border: 1px solid #2a2a4a;
-            border-radius: 8px;
+            background: #151a27;
+            border: 1px solid #31405e;
+            border-radius: 6px;
         }
     )");
     auto* cardLayout = new QVBoxLayout(card_);
     cardLayout->setContentsMargins(10, 10, 10, 10);
-    cardLayout->setSpacing(2);
+    cardLayout->setSpacing(3);
 
     // IP (large)
     ipLbl_ = new QLabel("—");
     ipLbl_->setStyleSheet(
-        "color:#7eb8f7; font-size:15px; font-weight:bold; "
+        "color:#8fc5ff; font-size:14px; font-weight:bold; "
         "font-family:'Cascadia Code','Consolas',monospace;");
     ipLbl_->setAlignment(Qt::AlignCenter);
     cardLayout->addWidget(ipLbl_);
@@ -112,16 +112,16 @@ void SidePanel::buildUi() {
     outer->addStretch();
 
     // Legend
-    auto* legendTitle = new QLabel("Port Legend");
-    legendTitle->setStyleSheet("color:#4a6a8a; font-size:10px; font-weight:bold;");
+    auto* legendTitle = new QLabel("Port Colors");
+    legendTitle->setStyleSheet("color:#6f8db3; font-size:10px; font-weight:bold;");
     outer->addWidget(legendTitle);
 
     struct LegEntry { QString col; QString text; };
     for (auto [col, text] : QVector<LegEntry>{
-            {"#3affb0", "Secure (HTTPS/SSH)"},
-            {"#ff3a3a", "Danger (HTTP/Telnet)"},
-            {"#ffb03a", "Caution (DNS/DB)"},
-            {"#ffe033", "Unknown Port"} })
+            {"#3affb0", "Secure"},
+            {"#ff3a3a", "Insecure"},
+            {"#ffb03a", "Network Service"},
+            {"#ffe033", "Unclassified"} })
     {
         auto* row = new QWidget;
         auto* rl  = new QHBoxLayout(row);
@@ -173,6 +173,29 @@ void SidePanel::showNode(const QString& ip,
         QString("color:%1; font-size:12px;").arg(catCol.name()));
 
     processLbl_->setText(process.isEmpty() ? "(unknown)" : process);
+    bytesLbl_->setText(formatBytes(bytes));
+    packetsLbl_->setText(QLocale().toString(static_cast<qlonglong>(packets)));
+}
+
+void SidePanel::showHost(const QString& host,
+                         const QString& ip,
+                         uint64_t bytes, uint64_t packets,
+                         uint64_t flows)
+{
+    card_->setVisible(true);
+    placeholderLbl_->setVisible(false);
+
+    ipLbl_->setText(host);
+    stateLbl_->setText("HOST");
+    stateLbl_->setStyleSheet(
+        "background:#1e2a3a; color:#8fc5ff; border-radius:4px; "
+        "font-size:10px; padding:2px 6px;");
+
+    portLbl_->setText(ip.isEmpty() ? "—" : ip);
+    portCatLbl_->setText(QString("%1 flows").arg(
+        QLocale().toString(static_cast<qlonglong>(flows))));
+    portCatLbl_->setStyleSheet("color:#8fc5ff; font-size:12px;");
+    processLbl_->setText("host summary");
     bytesLbl_->setText(formatBytes(bytes));
     packetsLbl_->setText(QLocale().toString(static_cast<qlonglong>(packets)));
 }

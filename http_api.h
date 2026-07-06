@@ -14,6 +14,7 @@
 //   GET /flows       — JSON array of all current FlowSnapshot rows
 //   GET /stats       — total packets, bytes, flow count
 //   GET /health      — {"status":"ok"}
+//   POST /ingest     — accepts remote agent flow JSON
 //
 // No external dependencies — uses raw POSIX sockets + std::thread.
 // This runs only on Linux (same platform as the rest of the project).
@@ -31,8 +32,9 @@ public:
     // It must be thread-safe (FlowManager::get_snapshot() already is).
     using SnapshotFn = std::function<std::vector<FlowSnapshot>()>;
     using StatsFn    = std::function<void(uint64_t& pkts, uint64_t& bytes, size_t& flows)>;
+    using IngestFn   = std::function<void(const std::vector<FlowSnapshot>& flows)>;
 
-    explicit HttpApi(uint16_t port, SnapshotFn snapFn, StatsFn statsFn);
+    explicit HttpApi(uint16_t port, SnapshotFn snapFn, StatsFn statsFn, IngestFn ingestFn = {});
     ~HttpApi();
 
     bool start();  // returns false on bind failure
@@ -43,10 +45,15 @@ public:
 private:
     void serverLoop();
     void handleClient(int clientFd);
+    void handleIngest(int clientFd, const std::string& request);
 
     // Response builders
     std::string buildFlowsJson();
     std::string buildStatsJson();
+    static std::vector<FlowSnapshot> parseIngestJson(const std::string& body);
+    static std::string jsonStringField(const std::string& obj, const std::string& key);
+    static uint64_t jsonUIntField(const std::string& obj, const std::string& key);
+    static std::string requestBody(const std::string& request);
     static std::string httpOk(const std::string& body,
                               const std::string& contentType = "application/json");
     static std::string httpNotFound();
@@ -55,6 +62,7 @@ private:
     uint16_t     port_;
     SnapshotFn   snapFn_;
     StatsFn      statsFn_;
+    IngestFn     ingestFn_;
     int          serverFd_ = -1;
     std::thread  thread_;
     std::atomic<bool> running_{ false };

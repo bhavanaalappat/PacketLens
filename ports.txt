@@ -22,6 +22,9 @@
 993   IMAPS        secure
 995   POP3S        secure
 8443  HTTPS-Alt    secure
+5228  Google-FCM   secure
+5229  Google-FCM   secure
+5230  Google-FCM   secure
 
 # ── Caution (infrastructure / database) ──────────────────────────────────────
 53    DNS          caution

@@ -12,6 +12,9 @@
 #include <QMainWindow>
 #include <QLabel>
 #include <QTimer>
+#include <QStringList>
+
+#include "flow_manager.h"
 
 class SnifferBackend;
 class ConnectionModel;
@@ -21,6 +24,8 @@ class QTableView;
 class QSortFilterProxyModel;
 class QTabWidget;
 class QSplitter;
+class QPushButton;
+class QComboBox;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -37,17 +42,30 @@ private slots:
     void onError(QString message);
     void onNodeSelected(QString ip, uint64_t bytes, uint64_t packets,
                         QString process, quint16 port, QString state);
+    void onHostSelected(QString host, QString ip, uint64_t bytes,
+                        uint64_t packets, uint64_t flows);
+    void onChooseInterfaces();
+    void onHostFilterChanged();
 
 private:
     void setupUi();
     void applyDarkStyle();
+    void initializeInterfaces();
+    bool startCaptureWithInterfaces(const QStringList& interfaces);
+    void updateInterfaceButton();
+    QString interfaceSummary() const;
+    void updateHostFilter(const std::vector<FlowSnapshot>& snapshot);
+    std::vector<FlowSnapshot> applyHostFilter(const std::vector<FlowSnapshot>& snapshot) const;
 
     SnifferBackend*        backend_    = nullptr;
     ConnectionModel*       model_      = nullptr;
     QSortFilterProxyModel* proxy_      = nullptr;
     QTableView*            table_      = nullptr;
     QLabel*                statusLbl_  = nullptr;
+    QPushButton*           ifaceBtn_   = nullptr;
+    QComboBox*             hostFilter_ = nullptr;
     QTimer*                timer_      = nullptr;
+    QStringList            selectedInterfaces_;
 
     // Graph view components
     NetworkGraphWidget*    graphWidget_ = nullptr;

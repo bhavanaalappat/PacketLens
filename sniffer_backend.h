@@ -3,9 +3,11 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <memory>
 #include <thread>
 #include <atomic>
+#include <vector>
 
 #include "flow_manager.h"
 #include "http_api.h"
@@ -16,10 +18,17 @@ class SnifferBackend : public QObject {
     Q_OBJECT
 
 public:
+    struct CaptureInterface {
+        QString name;
+        QString description;
+    };
+
     explicit SnifferBackend(QObject* parent = nullptr);
     ~SnifferBackend() override;
 
-    bool start();
+    static std::vector<CaptureInterface> availableInterfaces(QString* error = nullptr);
+
+    bool start(const QStringList& interfaces = {});
     void stop();
 
     std::vector<FlowSnapshot> snapshot() const { return manager_.get_snapshot(); }
@@ -37,19 +46,21 @@ signals:
     void errorOccurred(QString message);
 
 private:
-    void snifferThread();
+    void snifferThread(void* handle);
     void workerThread();
+    void cleanupThread();  // Active timeout-based cleanup thread
 
     mutable FlowManager manager_;
 
-    void*              pcap_handle_  = nullptr;
+    std::vector<void*> pcap_handles_;
 
     struct RawPacket;
     struct PacketQueue;
     std::unique_ptr<PacketQueue> queue_;
 
-    std::thread sniffer_thread_;
+    std::vector<std::thread> sniffer_threads_;
     std::thread worker_thread_;
+    std::thread cleanup_thread_;   // ← Active cleanup thread
     std::atomic<bool> running_{ false };
 
     // Embedded HTTP REST API

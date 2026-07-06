@@ -1,1 +1,4 @@
 build/
+build-current/
+__pycache__/
+*.pyc

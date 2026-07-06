@@ -24,6 +24,14 @@
 #include <QTabWidget>
 #include <QSplitter>
 #include <QTabBar>
+#include <QPushButton>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QComboBox>
+#include <QSignalBlocker>
+#include <set>
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 MainWindow::MainWindow(QWidget* parent)
@@ -37,6 +45,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     applyDarkStyle();
     setupUi();
+    initializeInterfaces();
 
     connect(backend_, &SnifferBackend::newConnectionFound,
             this,     &MainWindow::onNewConnection,
@@ -49,12 +58,14 @@ MainWindow::MainWindow(QWidget* parent)
     // Connect graph node clicks to side panel
     connect(graphWidget_, &NetworkGraphWidget::nodeSelected,
             this,         &MainWindow::onNodeSelected);
+    connect(graphWidget_, &NetworkGraphWidget::hostSelected,
+            this,         &MainWindow::onHostSelected);
 
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, &MainWindow::onRefreshTimer);
     timer_->start(1000);
 
-    if (!backend_->start()) {
+    if (!startCaptureWithInterfaces(selectedInterfaces_)) {
         // errorOccurred signal will show a dialog
     }
 }
@@ -87,6 +98,20 @@ void MainWindow::setupUi() {
     search->setPlaceholderText("Filter table (IP, process, state…)");
     search->setMaximumWidth(280);
 
+    ifaceBtn_ = new QPushButton("Interfaces");
+    ifaceBtn_->setObjectName("interfaceButton");
+    ifaceBtn_->setToolTip("Select one or more capture interfaces");
+    connect(ifaceBtn_, &QPushButton::clicked,
+            this,      &MainWindow::onChooseInterfaces);
+
+    hostFilter_ = new QComboBox;
+    hostFilter_->setObjectName("hostFilter");
+    hostFilter_->setMinimumWidth(150);
+    hostFilter_->addItem("All hosts", "");
+    hostFilter_->setToolTip("Filter aggregate view by reporting host");
+    connect(hostFilter_, &QComboBox::currentIndexChanged,
+            this,        &MainWindow::onHostFilterChanged);
+
     statusLbl_ = new QLabel("Starting…");
     statusLbl_->setObjectName("statusLabel");
     statusLbl_->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -94,6 +119,10 @@ void MainWindow::setupUi() {
     hLayout->addWidget(title);
     hLayout->addStretch();
     hLayout->addWidget(search);
+    hLayout->addSpacing(8);
+    hLayout->addWidget(hostFilter_);
+    hLayout->addSpacing(8);
+    hLayout->addWidget(ifaceBtn_);
     hLayout->addSpacing(12);
     hLayout->addWidget(statusLbl_);
 
@@ -133,14 +162,15 @@ void MainWindow::setupUi() {
     table_->verticalHeader()->hide();
     table_->horizontalHeader()->setStretchLastSection(true);
     table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);
-    table_->setColumnWidth(0, 130);
-    table_->setColumnWidth(1,  60);
-    table_->setColumnWidth(2, 130);
-    table_->setColumnWidth(3,  60);
-    table_->setColumnWidth(4,  55);
-    table_->setColumnWidth(5,  80);
-    table_->setColumnWidth(6,  90);
-    table_->setColumnWidth(7, 140);
+    table_->setColumnWidth(0, 110);
+    table_->setColumnWidth(1, 130);
+    table_->setColumnWidth(2,  60);
+    table_->setColumnWidth(3, 130);
+    table_->setColumnWidth(4,  60);
+    table_->setColumnWidth(5,  55);
+    table_->setColumnWidth(6,  80);
+    table_->setColumnWidth(7,  90);
+    table_->setColumnWidth(8, 140);
 
     tableLayout->addWidget(table_);
     tabs_->addTab(tableTab, "  📋  Flow Table  ");
@@ -154,9 +184,9 @@ void MainWindow::setupUi() {
     graphSplit_->addWidget(sidePanel_);
     graphSplit_->setStretchFactor(0, 1);
     graphSplit_->setStretchFactor(1, 0);
-    graphSplit_->setSizes({ 1180, 240 });
-    graphSplit_->setHandleWidth(2);
-    graphSplit_->setStyleSheet("QSplitter::handle { background: #2a2a4a; }");
+    graphSplit_->setSizes({ 1240, 220 });
+    graphSplit_->setHandleWidth(1);
+    graphSplit_->setStyleSheet("QSplitter::handle { background: #26314a; }");
 
     tabs_->addTab(graphSplit_, "  🌐  Network Graph  ");
 
@@ -211,6 +241,26 @@ void MainWindow::applyDarkStyle() {
             font-size: 12px;
         }
         #searchBox:focus { border: 1px solid #6090d0; }
+
+        #interfaceButton {
+            background: #24344e;
+            border: 1px solid #42628c;
+            border-radius: 4px;
+            color: #c8d8f0;
+            padding: 4px 10px;
+            font-size: 12px;
+        }
+        #interfaceButton:hover { background: #2d4162; border-color: #5b84b8; }
+        #interfaceButton:pressed { background: #1e2b40; }
+
+        #hostFilter {
+            background: #1e1e30;
+            border: 1px solid #3a4a6a;
+            border-radius: 4px;
+            color: #c8d8f0;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
 
         #statusLabel { color: #88a0c0; font-size: 11px; }
 
@@ -270,27 +320,117 @@ void MainWindow::applyDarkStyle() {
     )");
 }
 
+void MainWindow::initializeInterfaces() {
+    QString ifaceError;
+    auto interfaces = SnifferBackend::availableInterfaces(&ifaceError);
+    selectedInterfaces_.clear();
+
+    for (const auto& iface : interfaces) {
+        if (iface.name != "any" && !iface.name.startsWith("lo")) {
+            selectedInterfaces_ << iface.name;
+            break;
+        }
+    }
+    if (selectedInterfaces_.isEmpty() && !interfaces.empty()) {
+        selectedInterfaces_ << interfaces.front().name;
+    }
+
+    if (selectedInterfaces_.isEmpty() && !ifaceError.isEmpty()) {
+        statusBar()->showMessage(ifaceError);
+    }
+    updateInterfaceButton();
+}
+
+QString MainWindow::interfaceSummary() const {
+    if (selectedInterfaces_.isEmpty()) return "none";
+    if (selectedInterfaces_.size() == 1) return selectedInterfaces_.front();
+    return QString("%1 +%2")
+        .arg(selectedInterfaces_.front())
+        .arg(selectedInterfaces_.size() - 1);
+}
+
+void MainWindow::updateInterfaceButton() {
+    if (!ifaceBtn_) return;
+    ifaceBtn_->setText(QString("Interfaces: %1").arg(interfaceSummary()));
+}
+
+bool MainWindow::startCaptureWithInterfaces(const QStringList& interfaces) {
+    if (!backend_->start(interfaces)) {
+        return false;
+    }
+    selectedInterfaces_ = interfaces;
+    updateInterfaceButton();
+    statusBar()->showMessage(
+        QString("Capturing on %1").arg(selectedInterfaces_.join(", ")),
+        4000
+    );
+    return true;
+}
+
+void MainWindow::updateHostFilter(const std::vector<FlowSnapshot>& snapshot) {
+    if (!hostFilter_) return;
+
+    QString selected = hostFilter_->currentData().toString();
+    std::set<QString> hosts;
+    for (const auto& flow : snapshot) {
+        hosts.insert(QString::fromStdString(flow.host.empty() ? "local" : flow.host));
+    }
+
+    QSignalBlocker blocker(hostFilter_);
+    hostFilter_->clear();
+    hostFilter_->addItem("All hosts", "");
+    int selectedIndex = 0;
+    for (const auto& host : hosts) {
+        hostFilter_->addItem(host, host);
+        if (host == selected) selectedIndex = hostFilter_->count() - 1;
+    }
+    hostFilter_->setCurrentIndex(selectedIndex);
+}
+
+std::vector<FlowSnapshot>
+MainWindow::applyHostFilter(const std::vector<FlowSnapshot>& snapshot) const {
+    if (!hostFilter_) return snapshot;
+    QString selected = hostFilter_->currentData().toString();
+    if (selected.isEmpty()) return snapshot;
+
+    std::vector<FlowSnapshot> filtered;
+    filtered.reserve(snapshot.size());
+    for (const auto& flow : snapshot) {
+        QString host = QString::fromStdString(flow.host.empty() ? "local" : flow.host);
+        if (host == selected) filtered.push_back(flow);
+    }
+    return filtered;
+}
+
 // ── Slots ─────────────────────────────────────────────────────────────────────
 void MainWindow::onRefreshTimer() {
     auto snap = backend_->snapshot();
+    updateHostFilter(snap);
+    auto visibleSnap = applyHostFilter(snap);
 
     // Update table model
-    model_->refresh(snap);
+    model_->refresh(visibleSnap);
 
     // Update graph (only when the graph tab is visible to save CPU)
-    if (tabs_->currentIndex() == 1) {
-        graphWidget_->updateFromSnapshot(snap);
+    if (tabs_->currentWidget() == graphSplit_) {
+        graphWidget_->updateFromSnapshot(visibleSnap);
     }
 
     uint64_t pkts  = backend_->totalPackets();
     uint64_t bytes = backend_->totalBytes();
 
     statusLbl_->setText(
-        QString("Flows: %1   |   Pkts: %2   |   Bytes: %3")
+        QString("Ifaces: %1   |   Hosts: %2   |   Flows: %3   |   Pkts: %4   |   Bytes: %5")
+            .arg(interfaceSummary())
+            .arg(hostFilter_ ? hostFilter_->count() - 1 : 0)
             .arg(model_->rowCount())
             .arg(pkts)
             .arg(bytes)
     );
+}
+
+void MainWindow::onHostFilterChanged() {
+    onRefreshTimer();
 }
 
 void MainWindow::onNewConnection(QString srcIp, QString dstIp,
@@ -304,13 +444,87 @@ void MainWindow::onNewConnection(QString srcIp, QString dstIp,
             .arg(process.isEmpty() ? "unknown" : process),
         4000
     );
+
+    Q_UNUSED(srcIp);
+    Q_UNUSED(dstIp);
 }
 
 void MainWindow::onError(QString message) {
     QMessageBox::critical(this, "PacketLens — Error", message);
 }
 
+void MainWindow::onChooseInterfaces() {
+    QString ifaceError;
+    auto interfaces = SnifferBackend::availableInterfaces(&ifaceError);
+    if (interfaces.empty()) {
+        QMessageBox::warning(
+            this,
+            "PacketLens — Interfaces",
+            ifaceError.isEmpty() ? "No capture interfaces found." : ifaceError
+        );
+        return;
+    }
+
+    QDialog dialog(this);
+    dialog.setWindowTitle("Capture Interfaces");
+    dialog.resize(440, 360);
+
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* hint = new QLabel("Select one or more interfaces to monitor.");
+    hint->setObjectName("statusLabel");
+    layout->addWidget(hint);
+
+    auto* list = new QListWidget(&dialog);
+    list->setSelectionMode(QAbstractItemView::NoSelection);
+    for (const auto& iface : interfaces) {
+        QString label = iface.description.isEmpty()
+            ? iface.name
+            : QString("%1 — %2").arg(iface.name, iface.description);
+        auto* item = new QListWidgetItem(label, list);
+        item->setData(Qt::UserRole, iface.name);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(selectedInterfaces_.contains(iface.name)
+            ? Qt::Checked
+            : Qt::Unchecked);
+    }
+    layout->addWidget(list);
+
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel,
+        &dialog
+    );
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    QStringList requested;
+    for (int i = 0; i < list->count(); ++i) {
+        auto* item = list->item(i);
+        if (item->checkState() == Qt::Checked) {
+            requested << item->data(Qt::UserRole).toString();
+        }
+    }
+
+    if (requested.isEmpty()) {
+        QMessageBox::warning(
+            this,
+            "PacketLens — Interfaces",
+            "Select at least one interface to capture."
+        );
+        return;
+    }
+
+    startCaptureWithInterfaces(requested);
+}
+
 void MainWindow::onNodeSelected(QString ip, uint64_t bytes, uint64_t packets,
                                  QString process, quint16 port, QString state) {
     sidePanel_->showNode(ip, bytes, packets, process, port, state);
+}
+
+void MainWindow::onHostSelected(QString host, QString ip, uint64_t bytes,
+                                uint64_t packets, uint64_t flows) {
+    sidePanel_->showHost(host, ip, bytes, packets, flows);
 }

@@ -18,12 +18,29 @@ void PortConfig::loadDefaults() {
         rules_[p] = { p == 80 ? "HTTP" : p == 21 ? "FTP" : p == 23 ? "Telnet" : "Mail/HTTP-Alt", PortCategory::Danger };
 
     // secure
-    for (uint16_t p : {443, 8443, 22, 993, 995, 465, 587})
-        rules_[p] = { p == 443 ? "HTTPS" : p == 22 ? "SSH" : "Secure-Mail", PortCategory::Secure };
+    for (uint16_t p : {443, 8443, 22, 993, 995, 465, 587, 5228, 5229, 5230})
+        rules_[p] = {
+            p == 443 ? "HTTPS" :
+            p == 22 ? "SSH" :
+            (p == 5228 || p == 5229 || p == 5230) ? "Google-FCM" :
+            "Secure-Mail",
+            PortCategory::Secure
+        };
 
     // caution
-    for (uint16_t p : {53, 123, 67, 68, 137, 138, 139, 445, 3306, 5432, 27017})
-        rules_[p] = { p == 53 ? "DNS" : p == 3306 ? "MySQL" : p == 5432 ? "Postgres" : "System/DB", PortCategory::Caution };
+    for (uint16_t p : {53, 123, 67, 68, 137, 138, 139, 445, 1900, 3306, 5353, 5432, 8765, 27017})
+        rules_[p] = {
+            p == 53 ? "DNS" :
+            p == 67 ? "DHCP-Srv" :
+            p == 68 ? "DHCP-Cli" :
+            p == 1900 ? "SSDP" :
+            p == 3306 ? "MySQL" :
+            p == 5353 ? "mDNS" :
+            p == 5432 ? "Postgres" :
+            p == 8765 ? "PacketLens" :
+            "System/DB",
+            PortCategory::Caution
+        };
 }
 
 // ── File loader ───────────────────────────────────────────────────────────────

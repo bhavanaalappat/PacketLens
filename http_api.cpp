@@ -12,10 +12,14 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <cctype>
 
 // ── Constructor / Destructor ──────────────────────────────────────────────────
-HttpApi::HttpApi(uint16_t port, SnapshotFn snapFn, StatsFn statsFn)
-    : port_(port), snapFn_(std::move(snapFn)), statsFn_(std::move(statsFn))
+HttpApi::HttpApi(uint16_t port, SnapshotFn snapFn, StatsFn statsFn, IngestFn ingestFn)
+    : port_(port),
+      snapFn_(std::move(snapFn)),
+      statsFn_(std::move(statsFn)),
+      ingestFn_(std::move(ingestFn))
 {}
 
 HttpApi::~HttpApi() { stop(); }
@@ -33,7 +37,7 @@ bool HttpApi::start() {
 
     sockaddr_in addr{};
     addr.sin_family      = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); // 127.0.0.1 only
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port        = htons(port_);
 
     if (::bind(serverFd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
@@ -46,7 +50,7 @@ bool HttpApi::start() {
     ::listen(serverFd_, 8);
     running_.store(true);
     thread_ = std::thread(&HttpApi::serverLoop, this);
-    std::cout << "[HttpApi] Listening on http://127.0.0.1:" << port_ << "\n";
+    std::cout << "[HttpApi] Listening on http://0.0.0.0:" << port_ << "\n";
     return true;
 }
 
@@ -87,12 +91,50 @@ void HttpApi::serverLoop() {
 
 // ── Handle one HTTP request ───────────────────────────────────────────────────
 void HttpApi::handleClient(int fd) {
-    // Read request (up to 4 KB — we only need the first line)
-    char buf[4096] = {};
-    ssize_t n = ::recv(fd, buf, sizeof(buf) - 1, 0);
+    std::string req;
+    char buf[8192] = {};
+    ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
     if (n <= 0) return;
+    req.append(buf, static_cast<size_t>(n));
 
-    std::string req(buf, static_cast<size_t>(n));
+    auto headerEnd = req.find("\r\n\r\n");
+    if (headerEnd != std::string::npos) {
+        auto headers = req.substr(0, headerEnd);
+        auto lowerHeaders = headers;
+        std::transform(lowerHeaders.begin(), lowerHeaders.end(), lowerHeaders.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        size_t contentLength = 0;
+        auto clPos = lowerHeaders.find("content-length:");
+        if (clPos != std::string::npos) {
+            auto valueStart = clPos + std::string("content-length:").size();
+            while (valueStart < lowerHeaders.size() &&
+                   std::isspace(static_cast<unsigned char>(lowerHeaders[valueStart]))) {
+                ++valueStart;
+            }
+            auto valueEnd = valueStart;
+            while (valueEnd < lowerHeaders.size() &&
+                   std::isdigit(static_cast<unsigned char>(lowerHeaders[valueEnd]))) {
+                ++valueEnd;
+            }
+            if (valueEnd > valueStart) {
+                try {
+                    contentLength = std::stoull(lowerHeaders.substr(valueStart, valueEnd - valueStart));
+                } catch (...) {
+                    contentLength = 0;
+                }
+            }
+        }
+
+        constexpr size_t MAX_BODY = 2 * 1024 * 1024;
+        contentLength = std::min(contentLength, MAX_BODY);
+        size_t bodyStart = headerEnd + 4;
+        while (req.size() < bodyStart + contentLength) {
+            n = ::recv(fd, buf, sizeof(buf), 0);
+            if (n <= 0) break;
+            req.append(buf, static_cast<size_t>(n));
+        }
+    }
 
     // Parse method + path from first line
     std::istringstream ss(req);
@@ -104,6 +146,11 @@ void HttpApi::handleClient(int fd) {
     if (qpos != std::string::npos) path = path.substr(0, qpos);
 
     std::string response;
+
+    if (method == "POST" && path == "/ingest") {
+        handleIngest(fd, req);
+        return;
+    }
 
     if (path == "/health") {
         response = httpOk("{\"status\":\"ok\"}");
@@ -122,6 +169,26 @@ void HttpApi::handleClient(int fd) {
         response.insert(hdrEnd, "\r\nAccess-Control-Allow-Origin: *");
     }
 
+    ::send(fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+}
+
+void HttpApi::handleIngest(int fd, const std::string& request) {
+    if (!ingestFn_) {
+        auto response = httpNotFound();
+        ::send(fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+        return;
+    }
+
+    auto flows = parseIngestJson(requestBody(request));
+    ingestFn_(flows);
+
+    std::ostringstream body;
+    body << "{\"status\":\"ok\",\"accepted\":" << flows.size() << "}";
+    auto response = httpOk(body.str());
+    size_t hdrEnd = response.find("\r\n\r\n");
+    if (hdrEnd != std::string::npos) {
+        response.insert(hdrEnd, "\r\nAccess-Control-Allow-Origin: *");
+    }
     ::send(fd, response.c_str(), response.size(), MSG_NOSIGNAL);
 }
 
@@ -157,6 +224,7 @@ std::string HttpApi::buildFlowsJson() {
         const auto& f = snap[i];
         j << "  {"
           << "\"src_ip\":\""   << escapeJson(f.src_ip)   << "\","
+          << "\"host\":\""     << escapeJson(f.host)     << "\","
           << "\"src_port\":"   << f.src_port              << ","
           << "\"dst_ip\":\""   << escapeJson(f.dst_ip)   << "\","
           << "\"dst_port\":"   << f.dst_port              << ","
@@ -171,6 +239,97 @@ std::string HttpApi::buildFlowsJson() {
     }
     j << "]";
     return j.str();
+}
+
+std::string HttpApi::requestBody(const std::string& request) {
+    auto pos = request.find("\r\n\r\n");
+    if (pos == std::string::npos) return {};
+    return request.substr(pos + 4);
+}
+
+std::string HttpApi::jsonStringField(const std::string& obj, const std::string& key) {
+    std::string needle = "\"" + key + "\"";
+    auto pos = obj.find(needle);
+    if (pos == std::string::npos) return {};
+    pos = obj.find(':', pos + needle.size());
+    if (pos == std::string::npos) return {};
+    pos = obj.find('"', pos + 1);
+    if (pos == std::string::npos) return {};
+
+    std::string out;
+    bool escape = false;
+    for (size_t i = pos + 1; i < obj.size(); ++i) {
+        char c = obj[i];
+        if (escape) {
+            switch (c) {
+                case 'n': out += '\n'; break;
+                case 'r': out += '\r'; break;
+                case 't': out += '\t'; break;
+                default: out += c; break;
+            }
+            escape = false;
+        } else if (c == '\\') {
+            escape = true;
+        } else if (c == '"') {
+            break;
+        } else {
+            out += c;
+        }
+    }
+    return out;
+}
+
+uint64_t HttpApi::jsonUIntField(const std::string& obj, const std::string& key) {
+    std::string needle = "\"" + key + "\"";
+    auto pos = obj.find(needle);
+    if (pos == std::string::npos) return 0;
+    pos = obj.find(':', pos + needle.size());
+    if (pos == std::string::npos) return 0;
+    ++pos;
+    while (pos < obj.size() && std::isspace(static_cast<unsigned char>(obj[pos]))) ++pos;
+    size_t end = pos;
+    while (end < obj.size() && std::isdigit(static_cast<unsigned char>(obj[end]))) ++end;
+    if (end == pos) return 0;
+    try {
+        return std::stoull(obj.substr(pos, end - pos));
+    } catch (...) {
+        return 0;
+    }
+}
+
+std::vector<FlowSnapshot> HttpApi::parseIngestJson(const std::string& body) {
+    std::string default_host = jsonStringField(body, "host");
+    if (default_host.empty()) default_host = "remote";
+
+    std::vector<FlowSnapshot> flows;
+    size_t search = 0;
+    while (true) {
+        auto start = body.find('{', search);
+        if (start == std::string::npos) break;
+        auto end = body.find('}', start + 1);
+        if (end == std::string::npos) break;
+        std::string obj = body.substr(start, end - start + 1);
+        search = end + 1;
+
+        FlowSnapshot f;
+        f.host = jsonStringField(obj, "host");
+        if (f.host.empty()) f.host = default_host;
+        f.src_ip = jsonStringField(obj, "src_ip");
+        f.dst_ip = jsonStringField(obj, "dst_ip");
+        f.protocol = jsonStringField(obj, "protocol");
+        f.process = jsonStringField(obj, "process");
+        f.state = jsonStringField(obj, "state");
+        if (f.state.empty()) f.state = "EST";
+        f.src_port = static_cast<uint16_t>(jsonUIntField(obj, "src_port"));
+        f.dst_port = static_cast<uint16_t>(jsonUIntField(obj, "dst_port"));
+        f.packets = jsonUIntField(obj, "packets");
+        f.bytes = jsonUIntField(obj, "bytes");
+
+        if (!f.src_ip.empty() && !f.dst_ip.empty() && !f.protocol.empty()) {
+            flows.push_back(std::move(f));
+        }
+    }
+    return flows;
 }
 
 std::string HttpApi::buildStatsJson() {

@@ -29,14 +29,15 @@ public:
 private:
     std::vector<FlowSnapshot> rows_;
 
-    static constexpr int COL_SRC_IP   = 0;
-    static constexpr int COL_SRC_PORT = 1;
-    static constexpr int COL_DST_IP   = 2;
-    static constexpr int COL_DST_PORT = 3;
-    static constexpr int COL_PROTO    = 4;
-    static constexpr int COL_PACKETS  = 5;
-    static constexpr int COL_BYTES    = 6;
-    static constexpr int COL_PROCESS  = 7;
-    static constexpr int COL_STATE    = 8;
-    static constexpr int COL_COUNT    = 9;
+    static constexpr int COL_HOST     = 0;
+    static constexpr int COL_SRC_IP   = 1;
+    static constexpr int COL_SRC_PORT = 2;
+    static constexpr int COL_DST_IP   = 3;
+    static constexpr int COL_DST_PORT = 4;
+    static constexpr int COL_PROTO    = 5;
+    static constexpr int COL_PACKETS  = 6;
+    static constexpr int COL_BYTES    = 7;
+    static constexpr int COL_PROCESS  = 8;
+    static constexpr int COL_STATE    = 9;
+    static constexpr int COL_COUNT    = 10;
 };

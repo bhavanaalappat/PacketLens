@@ -26,6 +26,10 @@ public:
                   uint64_t bytes, uint64_t packets,
                   const QString& process, uint16_t port,
                   const QString& state);
+    void showHost(const QString& host,
+                  const QString& ip,
+                  uint64_t bytes, uint64_t packets,
+                  uint64_t flows);
 
     // Clear back to placeholder
     void clear();

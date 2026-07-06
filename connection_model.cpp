@@ -24,6 +24,7 @@ QVariant ConnectionModel::headerData(int section, Qt::Orientation orientation,
         return {};
 
     switch (section) {
+        case COL_HOST:     return "Host";
         case COL_SRC_IP:   return "Src IP";
         case COL_SRC_PORT: return "SPort";
         case COL_DST_IP:   return "Dst IP";
@@ -71,6 +72,7 @@ QVariant ConnectionModel::data(const QModelIndex& index, int role) const {
     if (role != Qt::DisplayRole) return {};
 
     switch (index.column()) {
+        case COL_HOST:     return QString::fromStdString(r.host);
         case COL_SRC_IP:   return QString::fromStdString(r.src_ip);
         case COL_SRC_PORT: return static_cast<int>(r.src_port);
         case COL_DST_IP:   return QString::fromStdString(r.dst_ip);
