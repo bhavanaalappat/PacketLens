@@ -12,21 +12,23 @@ Local network flow visibility is fragmented.
 PacketLens is a desktop application that captures TCP/UDP traffic, reconstructs active connections, attributes flows to local processes where possible, and presents the data in both a sortable table and an animated network graph. It also exposes a lightweight embedded HTTP API so external tools can query live flow snapshots, statistics, and health status.
 
 ## Architecture
-`CMakeLists.txt`        → Qt6 build definition, links `Qt6::Widgets`, `libpcap`, and `pthread`
-`main.cpp`              → Qt application entry point, creates `MainWindow`
-`main_window.cpp/h`     → Main GUI, tabs, refresh timer, backend orchestration
-`sniffer_backend.cpp/h` → libpcap capture engine, worker thread, embedded HTTP API
-`flow_manager.h`        → Flow lifecycle manager, thread-safe snapshots, garbage collection
-`tcp_parser.cpp/h`      → Linux `/proc/net/tcp` socket-to-process resolution
-`connection_model.cpp/h`→ Qt table model for active flow rows
-`network_graph_widget.cpp/h` → Force-directed graph visualization for remote endpoints
-`graph_node.cpp/h`      → Interactive graph nodes with hover cards and pinning
-`side_panel.cpp/h`      → Clicked-node details inspector
-`port_config.cpp/h`     → Human-editable port metadata from `ports.txt`
-`http_api.cpp/h`        → Embedded REST API server serving `/flows`, `/stats`, `/health`
-`packetlens_mcp.py`     → JSON-RPC stdio bridge for Claude Desktop / MCP integration
-`ports.txt`             → Local port classification rules
-`makefile`              → Minimal legacy build path for the non-Qt flow monitor
+
+| Component | Responsibility |
+|-----------|----------------|
+| `main.cpp` | Qt application entry point; initializes the application and creates the `MainWindow`. |
+| `MainWindow` (`main_window.cpp/h`) | Coordinates the UI, refresh timer, tab management, and communication with the backend. |
+| `SnifferBackend` (`sniffer_backend.cpp/h`) | Captures packets using `libpcap`, processes them on a worker thread, updates active flows, and integrates the embedded HTTP API. |
+| `FlowManager` (`flow_manager.h`) | Maintains thread-safe flow state, aggregates statistics, provides snapshots, and removes stale flows. |
+| `TCPParser` (`tcp_parser.cpp/h`) | Resolves Linux TCP sockets to their owning processes using `/proc/net/tcp` and `/proc`. |
+| `ConnectionModel` (`connection_model.cpp/h`) | Qt table model that supplies active network flow data to the Connections view. |
+| `NetworkGraphWidget` (`network_graph_widget.cpp/h`) | Renders an interactive force-directed graph of remote endpoints and active connections. |
+| `GraphNode` (`graph_node.cpp/h`) | Implements interactive graph nodes with hover cards, selection, and pinning. |
+| `SidePanel` (`side_panel.cpp/h`) | Displays detailed information for the currently selected graph node. |
+| `PortConfig` (`port_config.cpp/h`) | Loads user-defined port names and categories from `ports.txt`. |
+| `HttpApi` (`http_api.cpp/h`) | Embedded REST API server exposing `/flows`, `/stats`, and `/health` endpoints. |
+| `packetlens_mcp.py` | Model Context Protocol (MCP) bridge that streams PacketLens data to AI assistants such as Claude Desktop. |
+| `CMakeLists.txt` | Defines the Qt6 build configuration, dependencies, and compilation targets. |
+| `ports.txt` | User-editable port classification and labeling rules. |
 
 ## How It Works
 
@@ -127,45 +129,16 @@ Run the MCP bridge separately while PacketLens is already running:
 python3 packetlens_mcp.py
 ```
 
-The bridge is intended to be launched by Claude Desktop via its MCP server configuration.
+The bridge is intended to be launched by AI tools via its MCP server configuration.
 
-## Output
 
-PacketLens produces:
-* A live Qt GUI with a sortable flow table and an animated network graph
-* In-app process and protocol metadata for active flows
-* Embedded REST API responses on `127.0.0.1:8765`
-* A local MCP bridge for assistant integration
 
-### Example console output
-Because PacketLens is a GUI application, it does not print a batch report. Instead, you should see:
-* `[HttpApi] Listening on http://127.0.0.1:8765`
-* GUI window with active flow counts
-* API responses from `packetlens_mcp.py` when queried
-
-## File Structure
-.
-├── CMakeLists.txt          # Qt6 build script and source list
-├── makefile                # legacy minimal compile helper
-├── main.cpp                # Qt application entry point
-├── main_window.cpp/h       # UI shell, tabs, refresh timer, error handling
-├── sniffer_backend.cpp/h   # Packet capture, worker thread, FlowManager, embedded HTTP API
-├── flow_manager.h          # Thread-safe flow state manager
-├── tcp_parser.cpp/h        # Linux socket parser for process attribution
-├── connection_model.cpp/h  # Qt table model for active flows
-├── network_graph_widget.cpp/h # Force-directed graph canvas for remote endpoints
-├── graph_node.cpp/h        # Interactive graph node rendering and hover cards
-├── side_panel.cpp/h        # Node selection detail panel
-├── port_config.cpp/h       # Loads port labels and categories from `ports.txt`
-├── http_api.cpp/h          # Embedded REST API implementation
-├── packetlens_mcp.py       # Claude Desktop MCP stdio bridge
-├── ports.txt               # User-editable port classification rules
-
-## Design Decisions
-*Qt + libpcap*: Qt gives a polished cross-platform desktop UI while `libpcap` provides stable packet capture.
-*Embedded HTTP API*: A local REST endpoint makes PacketLens easy to script and integrate without an external service.
-*Linux `/proc` socket mapping*: This delivers process labels for TCP flows, improving triage in the UI.
-*Graph view + table view*: Users can switch between detailed flow rows and a high-level topological view.
+| Decision | Rationale |
+|----------|-----------|
+| Qt + `libpcap` | Native desktop interface with efficient packet capture. |
+| Embedded HTTP API | Enables scripting and external integrations. |
+| `/proc` socket mapping | Associates flows with local processes. |
+| Graph + Table views | Supports both overview and detailed inspection. |
 
 ## Caveats
 * PacketLens currently targets IPv4 Ethernet capture and Linux-style `/proc` socket inspection.
